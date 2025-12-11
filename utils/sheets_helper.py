@@ -17,15 +17,14 @@ supabase: Client = init_connection()
 
 # --- READ DATA ---
 def get_all_teams():
-    """Fetches Teams and normalizes column names."""
+    """Fetches Teams and normalizes column names and types."""
     try:
         response = supabase.table("Teams").select("*").execute()
         df = pd.DataFrame(response.data)
         
         if not df.empty:
-            # FIX: Rename lowercase columns from Supabase back to Title Case
-            # This handles if Supabase returns 'teamid' instead of 'TeamID'
-            df.columns = [c.lower() for c in df.columns] # Make all lower first
+            # 1. Rename columns to match our code (Title Case)
+            df.columns = [c.lower() for c in df.columns] 
             rename_map = {
                 'teamid': 'TeamID',
                 'password': 'Password',
@@ -34,9 +33,16 @@ def get_all_teams():
                 'lastactionround': 'LastActionRound'
             }
             df = df.rename(columns=rename_map)
+
+            # 2. FIX: FORCE NUMBERS (This prevents the TypeError)
+            # errors='coerce' turns bad text into 0. fillna(0) ensures no empty slots.
+            df['Cash'] = pd.to_numeric(df['Cash'], errors='coerce').fillna(0).astype(int)
+            df['CarbonDebt'] = pd.to_numeric(df['CarbonDebt'], errors='coerce').fillna(0).astype(int)
+            df['LastActionRound'] = pd.to_numeric(df['LastActionRound'], errors='coerce').fillna(0).astype(int)
             
         return df
     except Exception as e:
+        # If the database connection completely fails, return an empty table
         return pd.DataFrame()
 
 def get_game_state():

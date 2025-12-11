@@ -43,10 +43,20 @@ def get_game_state():
         return {"current_round": 1, "active_event": "None"}
 
 def get_team_data(team_id):
-    """Gets data for one specific team."""
+    """Gets data for one specific team, handling spaces/text issues."""
     df = get_all_teams()
     if df.empty: return None
-    team = df[df['TeamID'] == team_id]
+    
+    # --- FIX START: Clean the data ---
+    # Convert column to string and strip invisible spaces
+    df['TeamID'] = df['TeamID'].astype(str).str.strip()
+    
+    # Clean the user input too
+    clean_id = str(team_id).strip()
+    # --- FIX END ---
+
+    team = df[df['TeamID'] == clean_id]
+    
     if not team.empty:
         return team.iloc[0].to_dict()
     return None

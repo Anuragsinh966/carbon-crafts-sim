@@ -97,3 +97,39 @@ def admin_update_team_score(team_id, new_cash, new_debt):
         }).eq("TeamID", team_id).execute()
     except Exception as e:
         st.error(f"Update Failed: {e}")
+# --- NEW ADMIN FUNCTIONS ---
+def admin_adjust_team(team_id, cash_change, debt_change):
+    """
+    Adds or subtracts values from a specific team.
+    Example: cash_change = -500 (Deduct $500).
+    """
+    try:
+        # 1. Get current stats
+        current_data = get_team_data(team_id)
+        if not current_data: return False
+
+        # 2. Calculate new values
+        new_cash = int(current_data['Cash']) + int(cash_change)
+        new_debt = int(current_data['CarbonDebt']) + int(debt_change)
+
+        # 3. Update Database
+        supabase.table("Teams").update({
+            "Cash": new_cash,
+            "CarbonDebt": new_debt
+        }).eq("TeamID", team_id).execute()
+        
+        # Clear cache so admin sees it immediately
+        get_all_teams.clear()
+        return True
+    except Exception as e:
+        st.error(f"Adjustment Failed: {e}")
+        return False
+
+def admin_unlock_team(team_id):
+    """Resets a team's LastActionRound to 0 so they can play again."""
+    try:
+        supabase.table("Teams").update({"LastActionRound": 0}).eq("TeamID", team_id).execute()
+        get_all_teams.clear()
+        return True
+    except Exception as e:
+        return False

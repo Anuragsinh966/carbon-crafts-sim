@@ -5,8 +5,6 @@ def show():
     st.title("🌍 Global Market Dashboard")
     st.caption("Live Data Feed (Supabase)")
 
-    # FIX: We removed sheets_helper.get_all_teams.clear() because Supabase is real-time.
-    # We just need to rerun the app to fetch new data.
     if st.button("🔄 Refresh Board"):
         st.rerun()
 
@@ -14,14 +12,50 @@ def show():
     df = sheets_helper.get_all_teams()
     config = sheets_helper.get_game_state()
 
-    # Big Event Banner
+    # --- NEW: VISUAL EVENT CARD SYSTEM ---
     active_event = config.get('active_event', 'None')
+    
     if active_event != "None":
-        st.error(f"🚨 ACTIVE SCENARIO: {active_event}")
+        # Create a nice visual container
+        with st.container():
+            col1, col2 = st.columns([1, 4])
+            
+            with col1:
+                # Icon Mapping: Shows a giant emoji based on the event
+                icons = {
+                    "The Carbon Tax": "⚖️",
+                    "The Viral Expose": "📸", 
+                    "The Economic Recession": "📉",
+                    "The Tech Breakthrough": "🔬",
+                    "The Greenwashing Crackdown": "🕵️‍♂️"
+                }
+                # Default to a megaphone if event not found
+                icon = icons.get(active_event, "📢")
+                
+                # Render giant icon using HTML
+                st.markdown(f"<h1 style='text-align: center; font-size: 80px;'>{icon}</h1>", unsafe_allow_html=True)
+            
+            with col2:
+                st.error(f"### ACTIVE SCENARIO: {active_event}")
+                
+                # Flavor Text: The story behind the event
+                flavor_text = {
+                    "The Carbon Tax": "The government has imposed fines on pollution! High Debt teams will pay dearly.",
+                    "The Viral Expose": "Investigative journalists found dirt in the supply chain! Tier C revenue is crashing.",
+                    "The Economic Recession": "Global markets are down. Luxury (Tier A/B) goods are harder to sell.",
+                    "The Tech Breakthrough": "New innovation makes Green Tech cheaper! Tier A costs less this year.",
+                    "The Greenwashing Crackdown": "Auditors are here! If you have high debt, expect massive fines."
+                }
+                
+                description = flavor_text.get(active_event, "Check your participant dashboard for impact details.")
+                st.write(f"**Market Impact:** {description}")
+                
     else:
-        st.info("✅ Market Conditions: Stable")
+        st.success("✅ Market Conditions: Stable (No Active Events)")
+    
+    st.divider()
 
-    # Leaderboard Logic
+    # --- LEADERBOARD ---
     if not df.empty:
         # Calculate Scores
         df['Eco-Score'] = df.apply(lambda x: game_logic.calculate_final_score(x['Cash'], x['CarbonDebt']), axis=1)

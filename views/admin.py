@@ -6,7 +6,7 @@ from utils import sheets_helper, game_logic
 def show():
     st.title("👨‍💼 Game Master HQ")
     
-    # 1. CONTROLS
+    # Load State
     config = sheets_helper.get_game_state()
     
     # --- 1. EVENT CONTROL ---
@@ -43,12 +43,12 @@ def show():
     if st.button("🔄 Refresh"):
         sheets_helper.get_all_teams.clear()
         st.rerun()
-
+        
     df = sheets_helper.get_all_teams()
-    # Add Score Column
-    df['Score'] = df.apply(lambda x: game_logic.calculate_score(x['Cash'], x['CarbonDebt']), axis=1)
-    
-    st.dataframe(df[['TeamID', 'Cash', 'CarbonDebt', 'Score', 'LastActionRound']].sort_values('Score', ascending=False))
+    if not df.empty:
+        # FIX IS HERE: We now use 'calculate_final_score' instead of 'calculate_score'
+        df['Score'] = df.apply(lambda x: game_logic.calculate_final_score(x['Cash'], x['CarbonDebt']), axis=1)
+        st.dataframe(df[['TeamID', 'Cash', 'CarbonDebt', 'Score', 'LastActionRound']].sort_values('Score', ascending=False))
 
 def run_calculations(config):
     with st.status("Processing..."):

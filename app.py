@@ -2,14 +2,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Carbon Crafts", layout="wide")
 
-# --- DEBUGGING: Check for Secrets ---
-if "supabase" not in st.secrets:
-    st.error("🚨 CRITICAL ERROR: Supabase Secrets are missing!")
-    st.info("Go to Streamlit Cloud -> Settings -> Secrets and add your [supabase] keys.")
-    st.stop()
-
 # --- SAFE IMPORTS ---
-# This prevents the "White Screen" if a file is missing
 try:
     from views import participant, admin
 except ImportError as e:
@@ -33,12 +26,8 @@ if 'role' not in st.session_state:
 def login_screen():
     st.title("🌍 Carbon Crafts Sim")
     
-    # Dashboard Button (Only if file exists)
-    if HAS_DASHBOARD:
-        if st.button("📊 View Live Projector Dashboard", use_container_width=True):
-            st.session_state['view_dashboard'] = True
-            st.rerun()
-
+    # NOTE: Public Dashboard button REMOVED for security.
+    
     st.divider()
     
     col1, col2 = st.columns(2)
@@ -60,9 +49,10 @@ def login_screen():
 
 # --- MAIN ROUTER ---
 def main():
-    # 1. Dashboard View
+    # 1. Dashboard View (Only accessible if triggered by Admin)
     if st.session_state.get('view_dashboard') and HAS_DASHBOARD:
-        if st.sidebar.button("⬅️ Back to Login"):
+        # Button to return to Admin HQ
+        if st.sidebar.button("⬅️ Close Projector View"):
             st.session_state['view_dashboard'] = False
             st.rerun()
         dashboard.show()
@@ -74,14 +64,24 @@ def main():
     
     # 3. Logged In Routing
     else:
+        # Global Logout for everyone
         if st.sidebar.button("Logout"):
             st.session_state['logged_in'] = False
+            st.session_state['view_dashboard'] = False
             st.rerun()
             
         if st.session_state['role'] == "admin":
+            # --- ADMIN ONLY FEATURES ---
+            st.sidebar.divider()
+            st.sidebar.header("📺 Projector Controls")
+            if HAS_DASHBOARD:
+                if st.sidebar.button("📊 Launch Live Dashboard"):
+                    st.session_state['view_dashboard'] = True
+                    st.rerun()
+            
             admin.show()
         else:
-            # Safety check for Team ID
+            # Participant View
             team_id = st.session_state.get('team_id', 'Unknown')
             participant.show(team_id)
 

@@ -41,6 +41,15 @@ def login_screen():
 
 # --- MAIN ROUTER ---
 def main():
+    # Dashboard Override
+    if st.session_state.get('view_dashboard'):
+        if st.sidebar.button("⬅️ Back to Login"):
+            st.session_state['view_dashboard'] = False
+            st.rerun()
+        dashboard.show()
+        return
+
+    # Normal Routing
     if not st.session_state['logged_in']:
         login_screen()
     else:

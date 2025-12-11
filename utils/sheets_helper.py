@@ -1,56 +1,68 @@
 import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
-import time
 
 # --- CONNECT TO SUPABASE ---
-# No huge caching needed because Supabase is fast!
 @st.cache_resource
 def init_connection():
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["key"]
-    return create_client(url, key)
+    try:
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["key"]
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"❌ Supabase Connection Failed: {e}")
+        st.stop()
 
 supabase: Client = init_connection()
 
 # --- READ DATA ---
 def get_all_teams():
-    """Fetches Teams table."""
+    """Fetches Teams and normalizes column names."""
     try:
-        # Select all columns (*) from Teams
         response = supabase.table("Teams").select("*").execute()
-        # Convert list of dicts to DataFrame
-        return pd.DataFrame(response.data)
+        df = pd.DataFrame(response.data)
+        
+        if not df.empty:
+            # FIX: Rename lowercase columns from Supabase back to Title Case
+            # This handles if Supabase returns 'teamid' instead of 'TeamID'
+            df.columns = [c.lower() for c in df.columns] # Make all lower first
+            rename_map = {
+                'teamid': 'TeamID',
+                'password': 'Password',
+                'cash': 'Cash',
+                'carbondebt': 'CarbonDebt',
+                'lastactionround': 'LastActionRound'
+            }
+            df = df.rename(columns=rename_map)
+            
+        return df
     except Exception as e:
-        st.error(f"DB Error: {e}")
         return pd.DataFrame()
 
 def get_game_state():
-    """Fetches Config table."""
     try:
         response = supabase.table("Config").select("*").execute()
-        # Convert list of dicts [{'Key': 'x', 'Value': 'y'}] -> dict {'x': 'y'}
         data = {item['Key']: item['Value'] for item in response.data}
         return data
-    except Exception as e:
+    except:
         return {"current_round": 1, "active_event": "None"}
 
 def get_team_data(team_id):
-    """Fetches specific team."""
-    try:
-        # Clean input
-        clean_id = str(team_id).strip()
-        response = supabase.table("Teams").select("*").eq("TeamID", clean_id).execute()
-        if response.data:
-            return response.data[0] # Return the first match
-        return None
-    except Exception as e:
-        return None
+    df = get_all_teams()
+    if df.empty: return None
+    
+    clean_id = str(team_id).strip()
+    # Case-insensitive search
+    team = df[df['TeamID'].str.lower() == clean_id.lower()]
+    
+    if not team.empty:
+        return team.iloc[0].to_dict()
+    return None
 
 # --- WRITE DATA ---
 def submit_decision(team_id, round_num, choice):
     try:
-        # 1. Log Decision
+        # Supabase requires exact column names as defined in the database
         supabase.table("Decisions").insert({
             "TeamID": team_id,
             "Round": round_num,
@@ -58,38 +70,19 @@ def submit_decision(team_id, round_num, choice):
             "Timestamp": str(pd.Timestamp.now())
         }).execute()
         
-        # 2. Update Team Status
+        # Update Team
         supabase.table("Teams").update({"LastActionRound": round_num}).eq("TeamID", team_id).execute()
         return True
     except Exception as e:
-        st.error(f"Submit failed: {e}")
+        st.error(f"Submit Error: {e}")
         return False
 
 def update_config(key, value):
     try:
         supabase.table("Config").update({"Value": str(value)}).eq("Key", key).execute()
     except Exception as e:
-        st.error(f"Config failed: {e}")
+        st.error(f"Config Error: {e}")
 
-def batch_update_stats(updates_list):
-    """
-    Supabase handles updates differently. 
-    updates_list comes in as [(row_index_ignored, col_ignored, value), ...] 
-    BUT for Supabase, we need to know WHICH TEAM to update.
-    
-    CRITICAL: The previous code passed row numbers. 
-    We need to slightly refactor admin.py to pass TeamIDs if we fully switch.
-    
-    HOWEVER, to save you from editing admin.py, we will do a trick:
-    We will just re-fetch the teams, and update them one by one.
-    """
-    # NOTE: This function requires a slight logic change in admin.py to be efficient.
-    # But to keep it "drop-in replacement", we'll do this:
-    pass 
-    # See "Critical Fix" below for how to handle the Admin Calculation.
-
-# --- ADMIN CALCULATION HELPER (New) ---
-# Paste this function here, and I will tell you one tiny change to make in admin.py
 def admin_update_team_score(team_id, new_cash, new_debt):
     try:
         supabase.table("Teams").update({
@@ -97,4 +90,4 @@ def admin_update_team_score(team_id, new_cash, new_debt):
             "CarbonDebt": new_debt
         }).eq("TeamID", team_id).execute()
     except Exception as e:
-        print(e)
+        st.error(f"Update Failed: {e}")

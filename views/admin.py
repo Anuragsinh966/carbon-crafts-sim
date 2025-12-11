@@ -1,63 +1,16 @@
-import streamlit as st
-import pandas as pd
-import random
-from utils import sheets_helper, game_logic
-
-def show():
-    st.title("👨‍💼 Game Master HQ")
-    
-    # Load State
-    config = sheets_helper.get_game_state()
-    
-    # --- 1. EVENT CONTROL ---
-    st.subheader("1. Global Events")
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        st.info(f"Active: **{config['active_event']}**")
-    with c2:
-        if st.button("🎲 Random Event"):
-            evs = ["The Carbon Tax", "The Viral Expose", "The Economic Recession", "The Tech Breakthrough"]
-            new_ev = random.choice(evs)
-            sheets_helper.update_config("active_event", new_ev)
-            st.rerun()
-            
-    if st.button("🔴 Clear Event"):
-        sheets_helper.update_config("active_event", "None")
-        st.rerun()
-
-    # --- 2. ROUND CONTROL ---
-    st.subheader("2. Round Management")
-    c1, c2 = st.columns(2)
-    with c1:
-        new_round = st.number_input("Year", value=int(config['current_round']), min_value=1)
-        if st.button("Update Year"):
-            sheets_helper.update_config("current_round", new_round)
-            st.success("Updated!")
-    with c2:
-        st.write("End of Year:")
-        if st.button("⚡ CALCULATE RESULTS"):
-            run_calculations(config)
-
-    # --- 3. LEADERBOARD ---
-    st.subheader("3. Live Data")
-    if st.button("🔄 Refresh"):
-        sheets_helper.get_all_teams.clear()
-        st.rerun()
-        
-    df = sheets_helper.get_all_teams()
-    if not df.empty:
-        # FIX IS HERE: We now use 'calculate_final_score' instead of 'calculate_score'
-        df['Score'] = df.apply(lambda x: game_logic.calculate_final_score(x['Cash'], x['CarbonDebt']), axis=1)
-        st.dataframe(df[['TeamID', 'Cash', 'CarbonDebt', 'Score', 'LastActionRound']].sort_values('Score', ascending=False))
-
 def run_calculations(config):
-    with st.status("Processing..."):
-        sh = sheets_helper.connect_to_sheets()
-        decisions = pd.DataFrame(sh.worksheet("Decisions").get_all_records())
+    with st.status("Processing Market Data...", expanded=True) as status:
+        # Get all data
         df_teams = sheets_helper.get_all_teams()
         
-        current_decs = decisions[decisions['Round'] == config['current_round']]
-        updates = []
+        # Fetch decisions table manually to filter
+        response = sheets_helper.supabase.table("Decisions").select("*").execute()
+        decisions = pd.DataFrame(response.data)
+        
+        current_decs = decisions[decisions['Round'] == int(config['current_round'])]
+        
+        progress_bar = st.progress(0)
+        total_teams = len(df_teams)
         
         for idx, row in df_teams.iterrows():
             team_id = row['TeamID']
@@ -67,10 +20,13 @@ def run_calculations(config):
                 choice = my_dec.iloc[0]['SupplierChoice']
                 profit, debt_change, msg = game_logic.calculate_outcome(row, choice, config['active_event'])
                 
-                # Append update (Row, Col, Value) - Sheet rows start at 2
-                sheet_row = idx + 2
-                updates.append((sheet_row, 3, int(row['Cash'] + profit)))
-                updates.append((sheet_row, 4, int(row['CarbonDebt'] + debt_change)))
-        
-        sheets_helper.batch_update_stats(updates)
-        st.success("Done!")
+                new_cash = int(row['Cash'] + profit)
+                new_debt = int(row['CarbonDebt'] + debt_change)
+                
+                # UPDATE SUPABASE BY ID
+                sheets_helper.admin_update_team_score(team_id, new_cash, new_debt)
+                
+            progress_bar.progress((idx + 1) / total_teams)
+            
+        status.update(label="Calculation Complete!", state="complete")
+        st.success("Database Updated Successfully!")

@@ -4,12 +4,12 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import time
 
-# --- CONNECT TO GOOGLE SHEETS ---
+# --- CONNECT TO GOOGLE SHEETS (Cached) ---
+@st.cache_resource
 def connect_to_sheets():
     """Connects to Google Sheets using secrets.toml credentials."""
     try:
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        # Load credentials from .streamlit/secrets.toml
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
@@ -19,22 +19,28 @@ def connect_to_sheets():
         st.error(f"❌ Database Connection Error: {e}")
         st.stop()
 
-# --- READ DATA ---
+# --- READ DATA (Smart Caching) ---
+# ttl=10 means "Wait 10 seconds before asking Google again" to save API quota
+@st.cache_data(ttl=10)
 def get_all_teams():
-    """Returns the 'Teams' tab as a DataFrame."""
-    sh = connect_to_sheets()
-    ws = sh.worksheet("Teams")
-    data = ws.get_all_records()
-    return pd.DataFrame(data)
+    try:
+        sh = connect_to_sheets()
+        ws = sh.worksheet("Teams")
+        data = ws.get_all_records()
+        return pd.DataFrame(data)
+    except Exception as e:
+        # Use st.warning sparingly to avoid UI clutter during loads
+        return pd.DataFrame()
 
 @st.cache_data(ttl=10)
 def get_game_state():
-    """Returns the 'Config' tab settings (Round & Event)."""
-    sh = connect_to_sheets()
-    ws = sh.worksheet("Config")
-    data = ws.get_all_records()
-    # Convert list of dicts to simple dict: {'current_round': 1, ...}
-    return {row['Key']: row['Value'] for row in data}
+    try:
+        sh = connect_to_sheets()
+        ws = sh.worksheet("Config")
+        data = ws.get_all_records()
+        return {row['Key']: row['Value'] for row in data}
+    except Exception as e:
+        return {"current_round": 1, "active_event": "None"}
 
 def get_team_data(team_id):
     """Gets data for one specific team."""
@@ -47,7 +53,7 @@ def get_team_data(team_id):
 
 # --- WRITE DATA ---
 def submit_decision(team_id, round_num, choice):
-    """Logs a team's decision and locks them for the round."""
+    """Logs decision with retry protection."""
     sh = connect_to_sheets()
     try:
         # 1. Log Decision
@@ -68,23 +74,39 @@ def submit_decision(team_id, round_num, choice):
         return False
 
 def update_config(key, value):
-    """Updates a global setting (Admin only)."""
     sh = connect_to_sheets()
-    ws = sh.worksheet("Config")
-    cell = ws.find(key)
-    if cell:
-        # Column 2 is the Value column
+    try:
+        ws = sh.worksheet("Config")
+        cell = ws.find(key)
         ws.update_cell(cell.row, 2, value)
         get_game_state.clear() # Clear cache
     except Exception as e:
         st.error(f"Config Update Failed: {e}")
 
-def update_team_stats(team_id, new_cash, new_debt):
-    """Updates cash and debt after calculation."""
+def batch_update_stats(updates_list):
+    """
+    Updates list: [(row_num, col_num, value), ...]
+    Safe slow update loop to prevent API errors.
+    """
     sh = connect_to_sheets()
     ws = sh.worksheet("Teams")
-    cell = ws.find(team_id)
-    if cell:
-        # Col 3 = Cash, Col 4 = CarbonDebt
-        ws.update_cell(cell.row, 3, int(new_cash))
-        ws.update_cell(cell.row, 4, int(new_debt))
+    
+    if not updates_list:
+        return
+
+    progress_bar = st.progress(0)
+    total = len(updates_list)
+    
+    for i, (row, col, val) in enumerate(updates_list):
+        try:
+            ws.update_cell(row, col, val)
+            progress_bar.progress((i + 1) / total)
+            time.sleep(0.5) # Sleep to be nice to Google API
+        except Exception:
+            time.sleep(2) # Wait longer if error
+            try:
+                ws.update_cell(row, col, val)
+            except:
+                pass # Skip if it fails twice to prevent crash
+    
+    get_all_teams.clear()

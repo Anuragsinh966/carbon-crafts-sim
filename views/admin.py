@@ -91,6 +91,69 @@ def show():
             st.write("No logs yet.")
 
 def run_calculations(config):
+    with st.status("Processing Database...", expanded=True) as status:
+        # 1. Fetch Logs from 'master_log'
+        response = sheets_helper.supabase.table("master_log").select("*").execute()
+        logs = pd.DataFrame(response.data)
+        
+        # 2. Filter for current round strategy buys
+        curr_round = int(config.get('current_round', 1))
+        
+        # We need to extract the "choice" from the JSON column "details"
+        # This is the critical fix: The database stores {"choice": "Tier C"} inside 'details'
+        current_decs = pd.DataFrame()
+        
+        if not logs.empty:
+            # Filter first
+            mask = (logs['round'] == curr_round) & (logs['action_type'] == 'strategy_buy')
+            filtered_logs = logs[mask].copy()
+            
+            if not filtered_logs.empty:
+                # Helper function to extract choice safely
+                def extract_choice(row):
+                    details = row.get('details')
+                    if isinstance(details, dict):
+                        return details.get('choice')
+                    # Handle case where Supabase returns JSON string
+                    if isinstance(details, str):
+                        try:
+                            import json
+                            return json.loads(details).get('choice')
+                        except:
+                            return None
+                    return None
+
+                filtered_logs['SupplierChoice'] = filtered_logs.apply(extract_choice, axis=1)
+                current_decs = filtered_logs
+
+        # 3. Apply Calculations
+        df_teams = sheets_helper.get_all_teams()
+        updates_count = 0
+        
+        for idx, row in df_teams.iterrows():
+            team_id = row['TeamID']
+            
+            # Find decision for this team
+            if not current_decs.empty:
+                # Note: 'team_id' in logs is snake_case because it comes raw from DB
+                my_dec = current_decs[current_decs['team_id'] == team_id]
+                
+                if not my_dec.empty:
+                    choice = my_dec.iloc[0]['SupplierChoice']
+                    
+                    if choice:
+                        # Calculate outcome
+                        profit, debt_change, msg = game_logic.calculate_outcome(row, choice, config.get('active_event'))
+                        
+                        # Apply math
+                        new_cash = int(row['Cash'] + profit)
+                        new_debt = int(row['CarbonDebt'] + debt_change)
+                        
+                        # Update Database
+                        sheets_helper.admin_update_team_score(team_id, new_cash, new_debt)
+                        updates_count += 1
+        
+        status.update(label=f"Complete! Updated {updates_count} teams.", state="complete")
     with st.status("Processing...", expanded=True) as status:
         # Fetch Logs
         res = sheets_helper.supabase.table("master_log").select("*").execute()

@@ -3,7 +3,7 @@ from supabase import create_client, Client
 import pandas as pd
 import json
 
-# --- CONNECT ---
+# --- CONNECT TO SUPABASE ---
 @st.cache_resource
 def init_connection():
     try:
@@ -16,32 +16,38 @@ def init_connection():
 
 supabase: Client = init_connection()
 
-# --- READ DATA ---
+# --- READ DATA (THE FIX IS HERE) ---
 def get_all_teams():
-    """Fetches teams and maps new DB columns to App variable names."""
+    """Fetches teams and maps Supabase 'code' column to App 'TeamID'."""
     try:
-        # Select from new 'teams' table
+        # 1. Fetch data from 'teams' table
         response = supabase.table("teams").select("*").execute()
         df = pd.DataFrame(response.data)
         
         if not df.empty:
-            # Map 'snake_case' DB columns to 'TitleCase' App variables
+            # 2. DEBUG: Print columns to terminal (Optional, helps you see what's happening)
+            # print("Raw Columns from DB:", df.columns)
+
+            # 3. RENAME: Map Supabase columns -> App columns
+            # Your DB has 'code', 'carbon_debt', etc.
             rename_map = {
-                'code': 'TeamID',          
-                'carbon_debt': 'CarbonDebt', 
+                'code': 'TeamID',           # THIS IS THE CRITICAL FIX
+                'name': 'TeamName',
+                'carbon_debt': 'CarbonDebt',
                 'last_action_round': 'LastActionRound',
                 'cash': 'Cash',
                 'password': 'Password'
             }
             df = df.rename(columns=rename_map)
             
-            # Force numbers to be Integers (Fixes TypeError)
+            # 4. SAFETY: Force numbers to be integers
             for col in ['Cash', 'CarbonDebt', 'LastActionRound']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
             
         return df
     except Exception as e:
+        st.error(f"Database Read Error: {e}") # Show actual error instead of generic message
         return pd.DataFrame()
 
 def get_game_state():
@@ -52,21 +58,23 @@ def get_game_state():
         return {"current_round": 1, "active_event": "None"}
 
 def get_team_data(team_id):
+    """Fetches specific team by their ID."""
     df = get_all_teams()
     if df.empty: return None
     
     clean_id = str(team_id).strip().lower()
-    # Look up by TeamID (which comes from the 'code' column)
-    team = df[df['TeamID'].str.lower() == clean_id]
     
-    if not team.empty:
-        return team.iloc[0].to_dict()
+    # Look for the team in the 'TeamID' column (which we just renamed from 'code')
+    if 'TeamID' in df.columns:
+        team = df[df['TeamID'].str.lower() == clean_id]
+        if not team.empty:
+            return team.iloc[0].to_dict()
+            
     return None
 
 # --- WRITE DATA ---
 def submit_decision(team_id, round_num, choice):
     try:
-        # Log to 'master_log' using JSON
         log_entry = {
             "team_id": team_id,
             "round": round_num,
@@ -74,8 +82,7 @@ def submit_decision(team_id, round_num, choice):
             "details": {"choice": choice} 
         }
         supabase.table("master_log").insert(log_entry).execute()
-        
-        # Update Team using 'code' column
+        # Update using 'code' because that is the actual DB column name
         supabase.table("teams").update({"last_action_round": round_num}).eq("code", team_id).execute()
         return True
     except Exception as e:

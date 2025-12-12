@@ -1,8 +1,9 @@
 import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
+import json
 
-# --- CONNECT TO SUPABASE ---
+# --- CONNECT ---
 @st.cache_resource
 def init_connection():
     try:
@@ -10,46 +11,43 @@ def init_connection():
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except Exception as e:
-        st.error(f"❌ Supabase Connection Failed: {e}")
+        st.error(f"❌ Connection Error: {e}")
         st.stop()
 
 supabase: Client = init_connection()
 
 # --- READ DATA ---
 def get_all_teams():
-    """Fetches Teams and normalizes column names and types."""
+    """Fetches teams and maps new DB columns to App variable names."""
     try:
-        response = supabase.table("Teams").select("*").execute()
+        # Select from new 'teams' table
+        response = supabase.table("teams").select("*").execute()
         df = pd.DataFrame(response.data)
         
         if not df.empty:
-            # 1. Rename columns to match our code (Title Case)
-            df.columns = [c.lower() for c in df.columns] 
+            # Map 'snake_case' DB columns to 'TitleCase' App variables
             rename_map = {
-                'teamid': 'TeamID',
-                'password': 'Password',
+                'code': 'TeamID',          
+                'carbon_debt': 'CarbonDebt', 
+                'last_action_round': 'LastActionRound',
                 'cash': 'Cash',
-                'carbondebt': 'CarbonDebt',
-                'lastactionround': 'LastActionRound'
+                'password': 'Password'
             }
             df = df.rename(columns=rename_map)
-
-            # 2. FIX: FORCE NUMBERS (This prevents the TypeError)
-            # errors='coerce' turns bad text into 0. fillna(0) ensures no empty slots.
-            df['Cash'] = pd.to_numeric(df['Cash'], errors='coerce').fillna(0).astype(int)
-            df['CarbonDebt'] = pd.to_numeric(df['CarbonDebt'], errors='coerce').fillna(0).astype(int)
-            df['LastActionRound'] = pd.to_numeric(df['LastActionRound'], errors='coerce').fillna(0).astype(int)
+            
+            # Force numbers to be Integers (Fixes TypeError)
+            for col in ['Cash', 'CarbonDebt', 'LastActionRound']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
             
         return df
     except Exception as e:
-        # If the database connection completely fails, return an empty table
         return pd.DataFrame()
 
 def get_game_state():
     try:
-        response = supabase.table("Config").select("*").execute()
-        data = {item['Key']: item['Value'] for item in response.data}
-        return data
+        response = supabase.table("config").select("*").execute()
+        return {item['key']: item['value'] for item in response.data}
     except:
         return {"current_round": 1, "active_event": "None"}
 
@@ -57,9 +55,9 @@ def get_team_data(team_id):
     df = get_all_teams()
     if df.empty: return None
     
-    clean_id = str(team_id).strip()
-    # Case-insensitive search
-    team = df[df['TeamID'].str.lower() == clean_id.lower()]
+    clean_id = str(team_id).strip().lower()
+    # Look up by TeamID (which comes from the 'code' column)
+    team = df[df['TeamID'].str.lower() == clean_id]
     
     if not team.empty:
         return team.iloc[0].to_dict()
@@ -68,16 +66,17 @@ def get_team_data(team_id):
 # --- WRITE DATA ---
 def submit_decision(team_id, round_num, choice):
     try:
-        # Supabase requires exact column names as defined in the database
-        supabase.table("Decisions").insert({
-            "TeamID": team_id,
-            "Round": round_num,
-            "SupplierChoice": choice,
-            "Timestamp": str(pd.Timestamp.now())
-        }).execute()
+        # Log to 'master_log' using JSON
+        log_entry = {
+            "team_id": team_id,
+            "round": round_num,
+            "action_type": "strategy_buy",
+            "details": {"choice": choice} 
+        }
+        supabase.table("master_log").insert(log_entry).execute()
         
-        # Update Team
-        supabase.table("Teams").update({"LastActionRound": round_num}).eq("TeamID", team_id).execute()
+        # Update Team using 'code' column
+        supabase.table("teams").update({"last_action_round": round_num}).eq("code", team_id).execute()
         return True
     except Exception as e:
         st.error(f"Submit Error: {e}")
@@ -85,51 +84,35 @@ def submit_decision(team_id, round_num, choice):
 
 def update_config(key, value):
     try:
-        supabase.table("Config").update({"Value": str(value)}).eq("Key", key).execute()
+        supabase.table("config").update({"value": str(value)}).eq("key", key).execute()
     except Exception as e:
         st.error(f"Config Error: {e}")
 
 def admin_update_team_score(team_id, new_cash, new_debt):
     try:
-        supabase.table("Teams").update({
-            "Cash": new_cash,
-            "CarbonDebt": new_debt
-        }).eq("TeamID", team_id).execute()
+        supabase.table("teams").update({
+            "cash": new_cash,
+            "carbon_debt": new_debt
+        }).eq("code", team_id).execute()
     except Exception as e:
         st.error(f"Update Failed: {e}")
-# --- NEW ADMIN FUNCTIONS ---
+
 def admin_adjust_team(team_id, cash_change, debt_change):
-    """
-    Adds or subtracts values from a specific team.
-    Example: cash_change = -500 (Deduct $500).
-    """
     try:
-        # 1. Get current stats
-        current_data = get_team_data(team_id)
-        if not current_data: return False
-
-        # 2. Calculate new values
-        new_cash = int(current_data['Cash']) + int(cash_change)
-        new_debt = int(current_data['CarbonDebt']) + int(debt_change)
-
-        # 3. Update Database
-        supabase.table("Teams").update({
-            "Cash": new_cash,
-            "CarbonDebt": new_debt
-        }).eq("TeamID", team_id).execute()
+        team = get_team_data(team_id)
+        if not team: return False
         
-        # Clear cache so admin sees it immediately
-        get_all_teams.clear()
+        new_cash = team['Cash'] + int(cash_change)
+        new_debt = team['CarbonDebt'] + int(debt_change)
+        
+        admin_update_team_score(team_id, new_cash, new_debt)
         return True
-    except Exception as e:
-        st.error(f"Adjustment Failed: {e}")
+    except:
         return False
 
 def admin_unlock_team(team_id):
-    """Resets a team's LastActionRound to 0 so they can play again."""
     try:
-        supabase.table("Teams").update({"LastActionRound": 0}).eq("TeamID", team_id).execute()
-        get_all_teams.clear()
+        supabase.table("teams").update({"last_action_round": 0}).eq("code", team_id).execute()
         return True
-    except Exception as e:
+    except:
         return False

@@ -135,3 +135,45 @@ def reset_game_full():
     supabase.table("config").update({"value": "None"}).eq("key", "active_event").execute()
     supabase.table("config").update({"value": "Welcome!"}).eq("key", "system_message").execute()
     return {"status": "success"}
+# --- NEW: AUCTION CODE SYSTEM ---
+class RedeemRequest(BaseModel):
+    team_code: str
+    secret_code: str
+
+# Define your physical cards here
+AUCTION_ITEMS = {
+    "SCRUB-1": {"name": "Carbon Scrubber", "cost": 600, "debt_effect": -15},
+    "FOREST-X": {"name": "Reforestation Deed", "cost": 400, "debt_effect": -10},
+    "SOLAR-V":  {"name": "Solar Array", "cost": 800, "debt_effect": -20},
+}
+
+@app.post("/redeem-code")
+def redeem_code(req: RedeemRequest):
+    item = AUCTION_ITEMS.get(req.secret_code.upper())
+    
+    if not item:
+        raise HTTPException(status_code=400, detail="Invalid Code")
+
+    # 1. Get current team stats
+    team = supabase.table("teams").select("*").eq("code", req.team_code).single().execute().data
+    
+    if team['cash'] < item['cost']:
+        raise HTTPException(status_code=400, detail="Insufficient Cash!")
+
+    # 2. Add item to their asset list
+    current_assets = team.get('assets') or ""
+    if item['name'] in current_assets:
+         raise HTTPException(status_code=400, detail="You already own this!")
+    
+    new_assets = f"{current_assets},{item['name']}".strip(",")
+
+    # 3. Deduct Cash & Update DB
+    supabase.table("teams").update({
+        "cash": team['cash'] - item['cost'],
+        "assets": new_assets,
+        # Optional: Apply the debt reduction immediately, OR wait for year-end. 
+        # Here we apply immediately as a bonus:
+        "carbon_debt": max(0, team['carbon_debt'] + item['debt_effect']) 
+    }).eq("code", req.team_code).execute()
+
+    return {"status": "success", "item": item['name']}

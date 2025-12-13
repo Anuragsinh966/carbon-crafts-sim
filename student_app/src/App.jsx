@@ -1,3 +1,27 @@
+// Add this state variable at the top
+const [redeemCode, setRedeemCode] = useState("")
+
+// Add this function
+const handleRedeem = async () => {
+    if(!redeemCode) return;
+    setLoading(true)
+    try {
+        // Uses the SMART URL (VITE_ENGINE_URL) automatically
+        const ENGINE_URL = import.meta.env.VITE_ENGINE_URL || "http://127.0.0.1:8000"
+        
+        await axios.post(`${ENGINE_URL}/redeem-code`, {
+            team_code: teamId,
+            secret_code: redeemCode
+        })
+        alert(`✅ Purchased Successfully!`)
+        setRedeemCode("")
+        // Data will auto-refresh thanks to your interval
+    } catch (err) {
+        alert(err.response?.data?.detail || "Invalid Code or Not Enough Cash")
+    }
+    setLoading(false)
+}
+
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import { ShoppingCart, Leaf, TrendingUp, AlertTriangle, CheckCircle, Lock, DollarSign, Megaphone, Activity } from 'lucide-react'
@@ -187,6 +211,39 @@ function Dashboard({ teamId, onLogout }) {
                 <div className="text-xl font-bold text-white">{Math.floor(score)}</div>
             </div>
         </div>
+
+        {/* --- ADD THIS SECTION: AUCTION REDEMPTION --- */}
+        <div className="bg-slate-900 p-5 rounded-xl border border-dashed border-slate-700 mt-6">
+            <h3 className="text-sm font-bold text-purple-400 mb-3 uppercase tracking-wider flex items-center gap-2">
+              <Ticket size={16}/> Redeem Auction Code
+            </h3>
+        <div className="flex gap-2">
+              <input 
+                  className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 text-white uppercase placeholder:text-slate-600 outline-none focus:border-purple-500 transition-colors"
+                  placeholder="Enter Code (e.g. SCRUB-1)"
+                  value={redeemCode}
+                  onChange={(e) => setRedeemCode(e.target.value.toUpperCase())}
+              />
+              <button 
+                  onClick={handleRedeem}
+                  disabled={loading}
+                  className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-3 rounded-lg font-bold"
+              >
+                  Claim
+              </button>
+          </div>
+    
+    {/* Show Owned Assets */}
+    {team.assets && (
+        <div className="mt-4 flex flex-wrap gap-2">
+            {team.assets.split(',').filter(a=>a).map((asset, i) => (
+                <span key={i} className="px-3 py-1 bg-purple-900/30 text-purple-300 border border-purple-800 rounded-full text-xs font-bold flex items-center gap-1">
+                    <CheckCircle size={12}/> {asset}
+                </span>
+            ))}
+        </div>
+    )}
+</div>
 
         {/* 5. DECISION AREA */}
         <div>

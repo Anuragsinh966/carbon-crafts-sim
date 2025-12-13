@@ -40,9 +40,27 @@ export default function AdminApp() {
   }
 
   useEffect(() => {
-    fetchData()
-    const sub = supabase.channel('admin').on('postgres_changes', { event: '*', schema: 'public' }, fetchData).subscribe()
-    return () => supabase.removeChannel(sub)
+    fetchData() // Run once immediately on load
+
+    // --- A. Realtime Subscription (The Fast Way) ---
+    // Listens for instant updates from Supabase
+    const sub = supabase.channel('admin-feed')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'teams' }, fetchData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'config' }, fetchData)
+      .subscribe()
+
+    // --- B. Auto-Refresh Interval (The "Safety Net" Way) ---
+    // Forces a refresh every 5 seconds just in case Realtime gets stuck
+    const interval = setInterval(() => {
+      fetchData()
+    }, 5000)
+
+    // --- Cleanup Function ---
+    // Runs when you close the tab or component to stop memory leaks
+    return () => {
+      supabase.removeChannel(sub) // Stop listening
+      clearInterval(interval)     // Stop the timer
+    }
   }, [])
 
   // --- ACTIONS ---

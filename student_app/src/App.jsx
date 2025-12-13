@@ -87,16 +87,29 @@ function Dashboard({ teamId, onLogout }) {
     setConfig(configObj)
   }
 
-  // 2. Real-time Listeners
+ // 2. Real-time Listeners & Auto-Refresh
   useEffect(() => {
-    fetchData()
+    fetchData() // Run once immediately when component loads
+
+    // --- A. Realtime Subscription (The Fast Way) ---
     const sub = supabase.channel('student')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `code=eq.${teamId}` }, (payload) => setTeam(payload.new))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'config' }, fetchData) // Listen for broadcasts/events
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'config' }, fetchData)
       .subscribe()
 
-    return () => supabase.removeChannel(sub)
-  }, [teamId])
+    // --- B. Auto-Refresh Interval (The "Safety Net" Way) --- 
+    // This forces a refresh every 5000ms (5 seconds)
+    const interval = setInterval(() => {
+      fetchData()
+    }, 5000)
+
+    // --- Cleanup Function ---
+    // This runs when the user logs out or leaves the screen
+    return () => {
+      supabase.removeChannel(sub) // Stop listening to Realtime
+      clearInterval(interval)     // Stop the 5-second timer
+    }
+  }, [teamId]) // This tells React to restart this effect if the Team ID changes
 
   // 3. Buy Action
   const submitChoice = async (tier, cost, debt) => {

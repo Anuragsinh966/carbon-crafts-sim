@@ -15,49 +15,50 @@ def init_connection():
 
 supabase: Client = init_connection()
 
-# --- READ DATA ---
+# --- READ ---
 def get_all_teams():
-    """Reads all teams and normalizes column names for the app."""
     response = supabase.table("teams").select("*").order("code", desc=False).execute()
     df = pd.DataFrame(response.data)
-    
     if not df.empty:
-        # Standardize column names for game_logic.py
+        # Map DB columns to Friendly Names
         rename_map = {
             'code': 'TeamID',
             'name': 'TeamName',
             'carbon_debt': 'CarbonDebt',
             'last_action_round': 'LastActionRound',
             'cash': 'Cash',
-            'inventory_choice': 'InventoryChoice' # Crucial for new logic
+            'inventory_choice': 'InventoryChoice',
+            'assets': 'Assets'
         }
         df = df.rename(columns=rename_map)
     return df
 
 def get_game_state():
     response = supabase.table("config").select("*").execute()
+    # Convert list of rows to a simple dictionary: {'current_round': '1', ...}
     return {item['key']: item['value'] for item in response.data}
 
-# --- WRITE DATA (ADMIN ONLY) ---
+# --- WRITE (POWER FEATURES) ---
 def update_config(key, value):
     supabase.table("config").update({"value": str(value)}).eq("key", key).execute()
 
-def admin_update_team_score(team_id, new_cash, new_debt):
-    supabase.table("teams").update({
-        "cash": int(new_cash),
-        "carbon_debt": int(new_debt)
-    }).eq("code", team_id).execute()
-
-# --- RESET FUNCTION (NEW!) ---
-def start_new_round(next_round_number):
-    """
-    1. Clears everyone's 'InventoryChoice' so they can buy again.
-    2. Updates the 'current_round' number.
-    3. Clears the 'active_event'.
-    """
-    # Clear choices
-    supabase.table("teams").update({"inventory_choice": "None"}).neq("code", "placeholder").execute()
+def update_team_stat(team_id, field, value):
+    """GOD MODE: Updates a specific field for a specific team."""
+    # Map friendly name back to DB column if needed, or just pass direct
+    db_field = field.lower()
+    if field == 'TeamID': db_field = 'code'
+    if field == 'CarbonDebt': db_field = 'carbon_debt'
     
-    # Update Config
-    update_config("current_round", next_round_number)
+    supabase.table("teams").update({db_field: value}).eq("code", team_id).execute()
+
+def broadcast_message(msg):
+    """Sends a message to all student devices via the config table."""
+    update_config("system_message", msg)
+
+def start_new_round(next_round):
+    # 1. Reset Choices
+    supabase.table("teams").update({"inventory_choice": "None"}).neq("code", "placeholder").execute()
+    # 2. Update Round
+    update_config("current_round", next_round)
+    # 3. Clear Event
     update_config("active_event", "None")

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { ShoppingCart, Leaf, TrendingUp, AlertTriangle, CheckCircle, Lock, DollarSign, Megaphone, Activity, Ticket } from 'lucide-react'
+import { ShoppingCart, Leaf, TrendingUp, CheckCircle, Lock, DollarSign, Megaphone, Activity, Ticket } from 'lucide-react'
 import axios from 'axios'
 
 export default function App() {

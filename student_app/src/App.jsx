@@ -1,30 +1,7 @@
-// Add this state variable at the top
-const [redeemCode, setRedeemCode] = useState("")
-
-// Add this function
-const handleRedeem = async () => {
-    if(!redeemCode) return;
-    setLoading(true)
-    try {
-        // Uses the SMART URL (VITE_ENGINE_URL) automatically
-        const ENGINE_URL = import.meta.env.VITE_ENGINE_URL || "http://127.0.0.1:8000"
-        
-        await axios.post(`${ENGINE_URL}/redeem-code`, {
-            team_code: teamId,
-            secret_code: redeemCode
-        })
-        alert(`✅ Purchased Successfully!`)
-        setRedeemCode("")
-        // Data will auto-refresh thanks to your interval
-    } catch (err) {
-        alert(err.response?.data?.detail || "Invalid Code or Not Enough Cash")
-    }
-    setLoading(false)
-}
-
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-import { ShoppingCart, Leaf, TrendingUp, AlertTriangle, CheckCircle, Lock, DollarSign, Megaphone, Activity } from 'lucide-react'
+import { ShoppingCart, Leaf, TrendingUp, AlertTriangle, CheckCircle, Lock, DollarSign, Megaphone, Activity, Ticket } from 'lucide-react'
+import axios from 'axios'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -98,6 +75,9 @@ function Dashboard({ teamId, onLogout }) {
   const [team, setTeam] = useState(null)
   const [config, setConfig] = useState({})
   const [loading, setLoading] = useState(false)
+  
+  // Auction State
+  const [redeemCode, setRedeemCode] = useState("")
 
   // 1. Fetch Data
   const fetchData = async () => {
@@ -111,45 +91,58 @@ function Dashboard({ teamId, onLogout }) {
     setConfig(configObj)
   }
 
- // 2. Real-time Listeners & Auto-Refresh
+  // 2. Real-time Listeners & Auto-Refresh
   useEffect(() => {
-    fetchData() // Run once immediately when component loads
+    fetchData()
 
-    // --- A. Realtime Subscription (The Fast Way) ---
+    // A. Realtime Subscription (Fast)
     const sub = supabase.channel('student')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'teams', filter: `code=eq.${teamId}` }, (payload) => setTeam(payload.new))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'config' }, fetchData)
       .subscribe()
 
-    // --- B. Auto-Refresh Interval (The "Safety Net" Way) --- 
-    // This forces a refresh every 5000ms (5 seconds)
+    // B. Auto-Refresh Interval (Backup Safety Net)
     const interval = setInterval(() => {
       fetchData()
-    }, 5000)
+    }, 4000) // Refresh every 4 seconds
 
-    // --- Cleanup Function ---
-    // This runs when the user logs out or leaves the screen
     return () => {
-      supabase.removeChannel(sub) // Stop listening to Realtime
-      clearInterval(interval)     // Stop the 5-second timer
+      supabase.removeChannel(sub)
+      clearInterval(interval)
     }
-  }, [teamId]) // This tells React to restart this effect if the Team ID changes
+  }, [teamId])
 
-  // 3. Buy Action
+  // 3. Buy Action (Supply Chain)
   const submitChoice = async (tier, cost, debt) => {
     if(team.cash < cost) return alert("Insufficient Funds!");
     if(!confirm(`Confirm ${tier}? This will lock your choice for the year.`)) return;
 
     setLoading(true)
-    
-    // We update the database directly. 
-    // The Python Engine will pick this up when the Admin clicks "Calculate".
     await supabase.from('teams').update({
         inventory_choice: tier,
         last_action_round: parseInt(config.current_round)
     }).eq('code', teamId)
-    
     setLoading(false)
+  }
+
+  // 4. Redeem Code Action (Auction)
+  const handleRedeem = async () => {
+      if(!redeemCode) return;
+      setLoading(true)
+      try {
+          const ENGINE_URL = import.meta.env.VITE_ENGINE_URL || "http://127.0.0.1:8000"
+          
+          await axios.post(`${ENGINE_URL}/redeem-code`, {
+              team_code: teamId,
+              secret_code: redeemCode
+          })
+          alert(`✅ Purchased Successfully!`)
+          setRedeemCode("")
+          fetchData()
+      } catch (err) {
+          alert(err.response?.data?.detail || "Invalid Code or Insufficient Cash")
+      }
+      setLoading(false)
   }
 
   if (!team) return <div className="p-10 text-center animate-pulse text-emerald-400">Connecting to HQ...</div>
@@ -158,16 +151,14 @@ function Dashboard({ teamId, onLogout }) {
   const currentRound = parseInt(config.current_round || 1)
   const isLocked = team.last_action_round >= currentRound
   const score = (team.cash * 0.6) + ((100 - team.carbon_debt) * 10)
-
-  // Dynamic Styles based on Event
   const eventColor = config.active_event !== 'None' ? 'text-yellow-400' : 'text-slate-500';
 
   return (
     <div className="pb-20">
       
-      {/* 1. BROADCAST BANNER (New Feature) */}
+      {/* 1. BROADCAST BANNER */}
       {config.system_message && config.system_message !== "Welcome!" && (
-        <div className="bg-blue-600/20 border-b border-blue-500/30 p-3 text-center">
+        <div className="bg-blue-600/20 border-b border-blue-500/30 p-3 text-center animate-fade-in">
             <p className="text-blue-200 text-sm font-bold flex justify-center items-center gap-2 animate-pulse">
                 <Megaphone size={16}/> ADMIN MESSAGE: {config.system_message}
             </p>
@@ -175,7 +166,7 @@ function Dashboard({ teamId, onLogout }) {
       )}
 
       {/* 2. HEADER */}
-      <header className="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-10">
+      <header className="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-10 shadow-md">
         <div className="flex justify-between items-center max-w-lg mx-auto">
             <div className="flex items-center gap-3">
                 <div className="bg-emerald-500/10 p-2 rounded text-emerald-400 font-bold">{team.code.substring(0,2)}</div>
@@ -184,19 +175,19 @@ function Dashboard({ teamId, onLogout }) {
                     <p className="text-xs text-slate-400 font-mono">YEAR {currentRound}</p>
                 </div>
             </div>
-            <button onClick={onLogout} className="text-xs text-slate-500 hover:text-white px-3 py-1 rounded border border-slate-700">Logout</button>
+            <button onClick={onLogout} className="text-xs text-slate-500 hover:text-white px-3 py-1 rounded border border-slate-700 transition-colors">Logout</button>
         </div>
       </header>
 
       <div className="p-4 max-w-lg mx-auto space-y-6">
 
         {/* 3. EVENT CARD */}
-        <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg relative overflow-hidden">
-            <div className="absolute top-0 right-0 p-4 opacity-10">
+        <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg relative overflow-hidden group">
+            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                 <Activity size={100} className="text-white"/>
             </div>
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Market Status</h3>
-            <p className={`text-xl font-bold ${eventColor} flex items-center gap-2`}>
+            <p className={`text-xl font-bold ${eventColor} flex items-center gap-2 transition-colors`}>
                 {config.active_event === 'None' ? 'Stable Market' : config.active_event}
                 {config.active_event !== 'None' && <span className="flex h-2 w-2 rounded-full bg-yellow-500 animate-ping"></span>}
             </p>
@@ -212,42 +203,42 @@ function Dashboard({ teamId, onLogout }) {
             </div>
         </div>
 
-        {/* --- ADD THIS SECTION: AUCTION REDEMPTION --- */}
-        <div className="bg-slate-900 p-5 rounded-xl border border-dashed border-slate-700 mt-6">
+        {/* 5. AUCTION REDEMPTION BOX (New Feature) */}
+        <div className="bg-slate-900 p-5 rounded-xl border border-dashed border-slate-700 mt-2 mb-2">
             <h3 className="text-sm font-bold text-purple-400 mb-3 uppercase tracking-wider flex items-center gap-2">
-              <Ticket size={16}/> Redeem Auction Code
+                <Ticket size={16}/> Redeem Auction Code
             </h3>
-        <div className="flex gap-2">
-              <input 
-                  className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 text-white uppercase placeholder:text-slate-600 outline-none focus:border-purple-500 transition-colors"
-                  placeholder="Enter Code (e.g. SCRUB-1)"
-                  value={redeemCode}
-                  onChange={(e) => setRedeemCode(e.target.value.toUpperCase())}
-              />
-              <button 
-                  onClick={handleRedeem}
-                  disabled={loading}
-                  className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-3 rounded-lg font-bold"
-              >
-                  Claim
-              </button>
-          </div>
-    
-    {/* Show Owned Assets */}
-    {team.assets && (
-        <div className="mt-4 flex flex-wrap gap-2">
-            {team.assets.split(',').filter(a=>a).map((asset, i) => (
-                <span key={i} className="px-3 py-1 bg-purple-900/30 text-purple-300 border border-purple-800 rounded-full text-xs font-bold flex items-center gap-1">
-                    <CheckCircle size={12}/> {asset}
-                </span>
-            ))}
+            <div className="flex gap-2">
+                <input 
+                    className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white uppercase placeholder:text-slate-600 outline-none focus:border-purple-500 transition-colors font-mono"
+                    placeholder="Enter Code (e.g. SCRUB-1)"
+                    value={redeemCode}
+                    onChange={(e) => setRedeemCode(e.target.value.toUpperCase())}
+                />
+                <button 
+                    onClick={handleRedeem}
+                    disabled={loading}
+                    className="bg-purple-600 hover:bg-purple-500 text-white px-6 rounded-lg font-bold shadow-lg shadow-purple-900/20 transition-all"
+                >
+                    {loading ? "..." : "Claim"}
+                </button>
+            </div>
+            
+            {/* Show Owned Assets */}
+            {team.assets && team.assets.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-2 animate-fade-in">
+                    {team.assets.split(',').filter(a=>a).map((asset, i) => (
+                        <span key={i} className="px-3 py-1 bg-purple-900/30 text-purple-300 border border-purple-800 rounded-full text-xs font-bold flex items-center gap-1 shadow-sm">
+                            <CheckCircle size={12}/> {asset}
+                        </span>
+                    ))}
+                </div>
+            )}
         </div>
-    )}
-</div>
 
-        {/* 5. DECISION AREA */}
+        {/* 6. DECISION AREA */}
         <div>
-            <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2">
+            <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2 border-t border-slate-800 pt-4">
                 {isLocked ? <Lock size={16} className="text-orange-400"/> : <ShoppingCart size={16} className="text-emerald-400"/>} 
                 SUPPLY CHAIN
             </h3>
@@ -267,7 +258,6 @@ function Dashboard({ teamId, onLogout }) {
                 </div>
             ) : (
                 <div className="space-y-3">
-                    {/* OPTION A */}
                     <StrategyBtn 
                         title="Tier A (Ethical)" 
                         price={1200} 
@@ -276,7 +266,6 @@ function Dashboard({ teamId, onLogout }) {
                         onClick={() => submitChoice('Tier A (Ethical)', 1200, -1)} 
                         loading={loading}
                     />
-                    {/* OPTION B */}
                     <StrategyBtn 
                         title="Tier B (Standard)" 
                         price={800} 
@@ -285,7 +274,6 @@ function Dashboard({ teamId, onLogout }) {
                         onClick={() => submitChoice('Tier B (Standard)', 800, 1)} 
                         loading={loading}
                     />
-                    {/* OPTION C */}
                     <StrategyBtn 
                         title="Tier C (Dirty)" 
                         price={500} 
@@ -303,7 +291,7 @@ function Dashboard({ teamId, onLogout }) {
   )
 }
 
-// --- SUB-COMPONENTS FOR CLEANER CODE ---
+// --- SUB-COMPONENTS ---
 
 function StatCard({ label, value, icon, color }) {
     return (
@@ -321,7 +309,7 @@ function StrategyBtn({ title, price, debt, debtColor, onClick, loading }) {
         <button 
             onClick={onClick}
             disabled={loading}
-            className="w-full bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-slate-500 p-4 rounded-xl flex justify-between items-center group transition-all text-left"
+            className="w-full bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-slate-500 p-4 rounded-xl flex justify-between items-center group transition-all text-left disabled:opacity-50"
         >
             <div>
                 <span className="text-white font-bold block text-lg group-hover:text-emerald-400 transition-colors">{title}</span>

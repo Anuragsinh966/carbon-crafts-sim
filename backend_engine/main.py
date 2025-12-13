@@ -4,7 +4,6 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
-import pandas as pd
 import game_logic
 
 # 1. SETUP
@@ -18,7 +17,6 @@ if not url or not key:
 supabase: Client = create_client(url, key)
 app = FastAPI()
 
-# 2. CORS (Security)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,8 +31,11 @@ class RoundRequest(BaseModel):
 
 class TeamUpdate(BaseModel):
     team_code: str
-    cash_change: int
-    debt_change: int
+    cash_change: int = 0
+    debt_change: int = 0
+
+class ManageTeamRequest(BaseModel):
+    team_code: str
 
 class BroadcastRequest(BaseModel):
     message: str
@@ -47,7 +48,7 @@ def health_check():
 
 @app.post("/calculate-round")
 def calculate_round(request: RoundRequest):
-    print(f"⚡ Calculation requested: {request.event_name}")
+    print(f"⚡ CALCULATING ROUND with event: {request.event_name}")
     response = supabase.table("teams").select("*").execute()
     updated_count = 0
     logs = []
@@ -55,16 +56,15 @@ def calculate_round(request: RoundRequest):
     for team in response.data:
         choice = team.get("inventory_choice", "None")
         if choice and choice != "None":
-            # Map DB columns to logic adapter
+            # 1. Calculate Outcome
             team_adapter = {'Cash': team['cash'], 'CarbonDebt': team['carbon_debt']}
-            
-            # Run Math
             profit, debt_change, msg = game_logic.calculate_outcome(team_adapter, choice, request.event_name)
             
-            # Update DB
+            # 2. Update Database (Deduct Cash/Update Debt)
             supabase.table("teams").update({
                 "cash": int(team['cash'] + profit),
-                "carbon_debt": int(team['carbon_debt'] + debt_change)
+                "carbon_debt": int(team['carbon_debt'] + debt_change),
+                "last_action_round": 999  # Lock them for this round
             }).eq("code", team['code']).execute()
             
             updated_count += 1
@@ -74,7 +74,7 @@ def calculate_round(request: RoundRequest):
 
 @app.post("/start-new-year")
 def start_new_year():
-    print("⏭️ Starting Next Year")
+    print("⏭️ STARTING NEW YEAR")
     # Reset Choices
     supabase.table("teams").update({"inventory_choice": "None"}).neq("code", "placeholder").execute()
     
@@ -87,52 +87,54 @@ def start_new_year():
     
     return {"status": "success", "round": new_round}
 
-# --- NEW ADVANCED FEATURES ---
+# --- TEAM MANAGEMENT API ---
 
-@app.post("/admin/update-team")
-def update_team_manual(req: TeamUpdate):
-    """Manually add/remove cash or debt from a specific team."""
-    print(f"🛠️ Manual Update: {req.team_code} | Cash: {req.cash_change}")
-    
-    # Get current values
-    res = supabase.table("teams").select("*").eq("code", req.team_code).single().execute()
-    team = res.data
-    
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
+@app.post("/admin/add-team")
+def add_team(req: ManageTeamRequest):
+    """Creates a new team with default stats."""
+    print(f"➕ Adding Team: {req.team_code}")
+    supabase.table("teams").insert({
+        "code": req.team_code,
+        "cash": 1500,
+        "carbon_debt": 0,
+        "inventory_choice": "None",
+        "last_action_round": 0
+    }).execute()
+    return {"status": "success"}
 
-    new_cash = team['cash'] + req.cash_change
-    new_debt = team['carbon_debt'] + req.debt_change
+@app.post("/admin/remove-team")
+def remove_team(req: ManageTeamRequest):
+    """Deletes a team permanently."""
+    print(f"❌ Removing Team: {req.team_code}")
+    supabase.table("teams").delete().eq("code", req.team_code).execute()
+    return {"status": "success"}
+
+@app.post("/admin/toggle-lock")
+def toggle_lock(req: ManageTeamRequest):
+    """Locks or Unlocks a specific team."""
+    # Check current status
+    res = supabase.table("teams").select("last_action_round").eq("code", req.team_code).single().execute()
+    current_val = res.data['last_action_round']
     
-    supabase.table("teams").update({
-        "cash": new_cash,
-        "carbon_debt": new_debt
-    }).eq("code", req.team_code).execute()
+    # Toggle (If > 0, set to 0 to unlock. If 0, set to 999 to lock)
+    new_val = 0 if current_val > 0 else 999
     
-    return {"status": "success", "new_cash": new_cash}
+    supabase.table("teams").update({"last_action_round": new_val}).eq("code", req.team_code).execute()
+    return {"status": "success", "locked": new_val > 0}
 
 @app.post("/admin/broadcast")
 def send_broadcast(req: BroadcastRequest):
-    """Updates the global system message for students."""
     supabase.table("config").update({"value": req.message}).eq("key", "system_message").execute()
     return {"status": "success"}
 
 @app.post("/admin/reset-game")
 def reset_game_full():
-    """⚠️ DANGER: Resets the entire game to start."""
     print("♻️ FACTORY RESET")
-    
-    # Reset Teams
     supabase.table("teams").update({
-        "cash": 1500,
-        "carbon_debt": 0,
-        "inventory_choice": "None",
-        "last_action_round": 0
+        "cash": 1500, "carbon_debt": 0, "inventory_choice": "None", "last_action_round": 0
     }).neq("code", "placeholder").execute()
     
-    # Reset Config
     supabase.table("config").update({"value": "1"}).eq("key", "current_round").execute()
     supabase.table("config").update({"value": "None"}).eq("key", "active_event").execute()
     supabase.table("config").update({"value": "Welcome!"}).eq("key", "system_message").execute()
-    
     return {"status": "success"}

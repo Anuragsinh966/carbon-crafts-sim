@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from 'recharts'
-import { Play, RotateCw, Trophy, Edit, Mic, AlertOctagon, Save, X, Trash2 } from 'lucide-react'
+import { Play, RotateCw, Trophy, Lock, Unlock, Plus, Trash2, Mic, AlertOctagon, Save, X, Eye } from 'lucide-react'
 import axios from 'axios'
 
-// Uses the online URL if available, otherwise defaults to local
+// SMART URL (Uses Vercel env variable if online, otherwise local)
 const ENGINE_URL = import.meta.env.VITE_ENGINE_URL || "http://127.0.0.1:8000"
 
 export default function AdminApp() {
@@ -14,15 +14,11 @@ export default function AdminApp() {
   
   // Navigation
   const [activeTab, setActiveTab] = useState("dashboard") // 'dashboard' | 'teams' | 'settings'
+  const [newTeamName, setNewTeamName] = useState("")
 
-  // Control State
+  // Game Control
   const [selectedEvent, setSelectedEvent] = useState("The Carbon Tax")
   const [broadcastMsg, setBroadcastMsg] = useState("")
-  
-  // Edit Modal State
-  const [editingTeam, setEditingTeam] = useState(null)
-  const [manualCash, setManualCash] = useState(0)
-  const [manualDebt, setManualDebt] = useState(0)
 
   // --- DATA SYNC ---
   const fetchData = async () => {
@@ -33,70 +29,71 @@ export default function AdminApp() {
     
     const processed = (tData || []).map(t => ({
       ...t,
-      score: (t.cash * 0.6) + ((100 - t.carbon_debt) * 10)
+      score: (t.cash * 0.6) + ((100 - t.carbon_debt) * 10),
+      is_locked: t.last_action_round >= parseInt(configObj.current_round || 1)
     }))
     setTeams(processed)
     setConfig(configObj)
   }
 
   useEffect(() => {
-    fetchData() // Run once immediately on load
-
-    // --- A. Realtime Subscription (The Fast Way) ---
-    // Listens for instant updates from Supabase
-    const sub = supabase.channel('admin-feed')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'teams' }, fetchData)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'config' }, fetchData)
-      .subscribe()
-
-    // --- B. Auto-Refresh Interval (The "Safety Net" Way) ---
-    // Forces a refresh every 5 seconds just in case Realtime gets stuck
-    const interval = setInterval(() => {
-      fetchData()
-    }, 5000)
-
-    // --- Cleanup Function ---
-    // Runs when you close the tab or component to stop memory leaks
-    return () => {
-      supabase.removeChannel(sub) // Stop listening
-      clearInterval(interval)     // Stop the timer
-    }
+    fetchData()
+    // Auto-Refresh Safety Net
+    const interval = setInterval(fetchData, 4000)
+    
+    // Realtime Listener
+    const sub = supabase.channel('admin').on('postgres_changes', { event: '*', schema: 'public' }, fetchData).subscribe()
+    return () => { clearInterval(interval); supabase.removeChannel(sub) }
   }, [])
 
   // --- ACTIONS ---
-  const handleEventRun = async () => {
-    if(!confirm(`Deploy ${selectedEvent}?`)) return;
+  
+  // 1. THE CALCULATE BUTTON
+  const handleCalculate = async () => {
+    if(!confirm(`⚠️ CONFIRM: Deduct money and apply ${selectedEvent}?`)) return;
     setLoading(true)
-    await supabase.from('config').update({ value: selectedEvent }).eq('key', 'active_event')
-    await axios.post(`${ENGINE_URL}/calculate-round`, { event_name: selectedEvent })
+    try {
+        await supabase.from('config').update({ value: selectedEvent }).eq('key', 'active_event')
+        const res = await axios.post(`${ENGINE_URL}/calculate-round`, { event_name: selectedEvent })
+        alert(`✅ Success! Updated ${res.data.updated} teams.`)
+        fetchData()
+    } catch (e) { alert("Connection Error: Is Python running?") }
     setLoading(false)
-    alert("✅ Calculation Complete")
   }
 
-  const handleManualUpdate = async () => {
-    if (!editingTeam) return;
-    try {
-        await axios.post(`${ENGINE_URL}/admin/update-team`, {
-            team_code: editingTeam.code,
-            cash_change: parseInt(manualCash),
-            debt_change: parseInt(manualDebt)
-        })
-        setEditingTeam(null)
-        setManualCash(0)
-        setManualDebt(0)
-        alert("Updated Successfully")
-        fetchData()
-    } catch(e) { alert("Failed to update team") }
+  const handleNextYear = async () => {
+      if(!confirm("Start Next Year? This resets choices.")) return;
+      await axios.post(`${ENGINE_URL}/start-new-year`)
+      fetchData()
+  }
+
+  // 2. TEAM MANAGEMENT ACTIONS
+  const handleAddTeam = async () => {
+      if(!newTeamName) return;
+      await axios.post(`${ENGINE_URL}/admin/add-team`, { team_code: newTeamName })
+      setNewTeamName("")
+      fetchData()
+  }
+
+  const handleRemoveTeam = async (code) => {
+      if(!confirm(`Delete ${code} permanently?`)) return;
+      await axios.post(`${ENGINE_URL}/admin/remove-team`, { team_code: code })
+      fetchData()
+  }
+
+  const handleToggleLock = async (code) => {
+      await axios.post(`${ENGINE_URL}/admin/toggle-lock`, { team_code: code })
+      fetchData()
   }
 
   const handleBroadcast = async () => {
     await axios.post(`${ENGINE_URL}/admin/broadcast`, { message: broadcastMsg })
-    alert("📢 Message Sent to Students")
     setBroadcastMsg("")
+    alert("📢 Sent!")
   }
 
   const handleReset = async () => {
-      if(confirm("⚠️ DANGER: Are you sure you want to RESET THE WHOLE GAME?")) {
+      if(confirm("⚠️ FACTORY RESET GAME?")) {
           await axios.post(`${ENGINE_URL}/admin/reset-game`)
           window.location.reload()
       }
@@ -106,62 +103,77 @@ export default function AdminApp() {
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
       
       {/* NAVBAR */}
-      <nav className="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-50 flex justify-between items-center">
+      <nav className="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-50 flex justify-between items-center shadow-md">
         <div className="flex items-center gap-3">
-            <div className="bg-emerald-500/20 p-2 rounded text-emerald-400 font-bold">CC</div>
+            <div className="bg-emerald-500/20 p-2 rounded text-emerald-400 font-bold border border-emerald-500/30">CC</div>
             <div>
-                <h1 className="font-bold text-lg">Mission Control</h1>
-                <p className="text-xs text-slate-400">Year {config.current_round}</p>
+                <h1 className="font-bold text-lg leading-none">Mission Control</h1>
+                <p className="text-xs text-slate-400">Year {config.current_round} • {config.active_event || 'None'}</p>
             </div>
         </div>
-        <div className="flex bg-slate-800 rounded p-1">
+        <div className="flex bg-slate-800/50 rounded p-1 border border-slate-700">
             {['dashboard', 'teams', 'settings'].map(tab => (
                 <button 
                     key={tab} onClick={() => setActiveTab(tab)}
-                    className={`px-4 py-2 rounded text-sm font-bold capitalize ${activeTab === tab ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                    className={`px-4 py-2 rounded text-sm font-bold capitalize transition-all ${activeTab === tab ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
                 >
                     {tab}
                 </button>
             ))}
         </div>
-        <button onClick={fetchData}><RotateCw size={20} className={loading?'animate-spin':''}/></button>
       </nav>
 
-      <main className="p-6 max-w-7xl mx-auto">
+      <main className="p-6 max-w-7xl mx-auto space-y-6">
         
-        {/* === TAB 1: DASHBOARD === */}
+        {/* === TAB 1: DASHBOARD (GAME FLOW) === */}
         {activeTab === 'dashboard' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
-                    <h2 className="text-blue-400 font-bold mb-4 flex gap-2"><Play size={18}/> Controls</h2>
-                    <select className="w-full bg-slate-950 p-3 rounded border border-slate-700 mb-3" 
-                        value={selectedEvent} onChange={e=>setSelectedEvent(e.target.value)}>
-                        <option>The Carbon Tax</option>
-                        <option>The Viral Expose</option>
-                        <option>The Economic Recession</option>
-                        <option>The Tech Breakthrough</option>
-                    </select>
-                    <button onClick={handleEventRun} disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 py-3 rounded font-bold mb-4">
-                        ⚡ Run Event
-                    </button>
-                    
-                    <div className="border-t border-slate-800 pt-4">
-                        <h3 className="text-sm font-bold text-slate-400 mb-2 flex gap-2"><Mic size={16}/> Broadcast</h3>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                
+                {/* LEFT: CONTROLLER */}
+                <div className="lg:col-span-4 space-y-6">
+                    <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-lg">
+                        <h2 className="text-blue-400 font-bold mb-4 flex items-center gap-2"><Play size={18}/> Game Engine</h2>
+                        
+                        <label className="text-xs font-bold text-slate-500 uppercase">1. Select Event</label>
+                        <select className="w-full bg-slate-950 p-3 rounded border border-slate-700 mb-4 mt-1 text-white" 
+                            value={selectedEvent} onChange={e=>setSelectedEvent(e.target.value)}>
+                            <option>The Carbon Tax</option>
+                            <option>The Viral Expose</option>
+                            <option>The Economic Recession</option>
+                            <option>The Tech Breakthrough</option>
+                        </select>
+                        
+                        <button onClick={handleCalculate} disabled={loading} 
+                            className="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-lg font-bold mb-4 shadow-lg shadow-blue-900/20 text-lg transition-all">
+                            {loading ? "Processing..." : "⚡ CALCULATE RESULTS"}
+                        </button>
+                        
+                        <div className="h-px bg-slate-800 my-4"></div>
+                        
+                        <button onClick={handleNextYear} className="w-full bg-emerald-600 hover:bg-emerald-500 py-3 rounded-lg font-bold">
+                            ⏭️ START NEXT YEAR
+                        </button>
+                    </div>
+
+                    <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+                         <h3 className="text-sm font-bold text-slate-400 mb-2 flex gap-2"><Mic size={16}/> Broadcast System</h3>
                         <div className="flex gap-2">
-                            <input className="flex-1 bg-slate-950 border border-slate-700 rounded px-2" placeholder="Msg..." value={broadcastMsg} onChange={e=>setBroadcastMsg(e.target.value)}/>
-                            <button onClick={handleBroadcast} className="bg-slate-700 px-3 rounded">Send</button>
+                            <input className="flex-1 bg-slate-950 border border-slate-700 rounded px-3 py-2 outline-none focus:border-emerald-500" 
+                                placeholder="Message to students..." value={broadcastMsg} onChange={e=>setBroadcastMsg(e.target.value)}/>
+                            <button onClick={handleBroadcast} className="bg-slate-700 hover:bg-slate-600 px-4 rounded font-bold">Send</button>
                         </div>
                     </div>
                 </div>
 
-                <div className="lg:col-span-2 bg-slate-900 p-6 rounded-xl border border-slate-800 h-[400px]">
-                     <h2 className="text-emerald-400 font-bold mb-4 flex gap-2"><Trophy size={18}/> Leaderboard</h2>
+                {/* RIGHT: LIVE DATA */}
+                <div className="lg:col-span-8 bg-slate-900 p-6 rounded-xl border border-slate-800 h-[500px]">
+                     <h2 className="text-emerald-400 font-bold mb-4 flex gap-2"><Trophy size={18}/> Live Leaderboard</h2>
                      <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={teams.sort((a,b)=>b.score-a.score).slice(0,10)}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false}/>
                             <XAxis dataKey="code" stroke="#64748b" fontSize={10} axisLine={false} tickLine={false}/>
                             <YAxis stroke="#64748b" fontSize={10} axisLine={false} tickLine={false}/>
-                            <Tooltip contentStyle={{backgroundColor:'#0f172a', border:'1px solid #334155'}}/>
+                            <Tooltip contentStyle={{backgroundColor:'#0f172a', border:'1px solid #334155', borderRadius:'8px'}} itemStyle={{color:'#10b981'}}/>
                             <Bar dataKey="score" fill="#10b981" radius={[4,4,0,0]} barSize={40}/>
                         </BarChart>
                     </ResponsiveContainer>
@@ -169,73 +181,78 @@ export default function AdminApp() {
             </div>
         )}
 
-        {/* === TAB 2: TEAM MANAGEMENT === */}
+        {/* === TAB 2: MANAGE TEAMS === */}
         {activeTab === 'teams' && (
-            <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-                <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-950 text-slate-400 uppercase font-bold">
-                        <tr>
-                            <th className="p-4">Team</th>
-                            <th className="p-4">Cash</th>
-                            <th className="p-4">Debt</th>
-                            <th className="p-4 text-right">Edit</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800">
-                        {teams.map(t => (
-                            <tr key={t.code} className="hover:bg-slate-800/50">
-                                <td className="p-4 font-bold">{t.code}</td>
-                                <td className="p-4 text-emerald-400 font-mono">${t.cash}</td>
-                                <td className="p-4 text-red-400 font-mono">{t.carbon_debt}</td>
-                                <td className="p-4 text-right">
-                                    <button onClick={() => setEditingTeam(t)} className="bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded border border-slate-700">Edit</button>
-                                </td>
+            <div className="space-y-6">
+                
+                {/* ADD TEAM BAR */}
+                <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex gap-4 items-center">
+                    <Plus className="text-emerald-400"/>
+                    <input className="bg-transparent border-none outline-none text-white flex-1 placeholder:text-slate-600" 
+                        placeholder="Enter New Team ID (e.g. TeamAlpha)..." value={newTeamName} onChange={e=>setNewTeamName(e.target.value)}/>
+                    <button onClick={handleAddTeam} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded font-bold text-sm">Create Team</button>
+                </div>
+
+                {/* TEAM LIST TABLE */}
+                <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden shadow-lg">
+                    <table className="w-full text-left text-sm">
+                        <thead className="bg-slate-950 text-slate-400 uppercase font-bold text-xs tracking-wider">
+                            <tr>
+                                <th className="p-4">Team</th>
+                                <th className="p-4">Cash / Debt</th>
+                                <th className="p-4">Choice</th>
+                                <th className="p-4 text-center">Status</th>
+                                <th className="p-4 text-right">Actions</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800">
+                            {teams.map(t => (
+                                <tr key={t.code} className="hover:bg-slate-800/50 transition-colors">
+                                    <td className="p-4 font-bold text-white">{t.code}</td>
+                                    <td className="p-4">
+                                        <span className="text-emerald-400 font-mono">${t.cash}</span>
+                                        <span className="text-slate-600 mx-2">|</span>
+                                        <span className="text-red-400 font-mono">{t.carbon_debt} CO2</span>
+                                    </td>
+                                    <td className="p-4">
+                                        {t.inventory_choice === 'None' ? 
+                                            <span className="text-slate-600 italic">Waiting...</span> : 
+                                            <span className="bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs border border-blue-800">{t.inventory_choice}</span>
+                                        }
+                                    </td>
+                                    <td className="p-4 text-center">
+                                        <button onClick={() => handleToggleLock(t.code)} className="group">
+                                            {t.is_locked ? 
+                                                <Lock size={16} className="text-orange-500 group-hover:text-white"/> : 
+                                                <Unlock size={16} className="text-slate-600 group-hover:text-white"/>
+                                            }
+                                        </button>
+                                    </td>
+                                    <td className="p-4 text-right flex justify-end gap-2">
+                                        <button onClick={() => handleRemoveTeam(t.code)} className="p-2 bg-red-900/20 hover:bg-red-900/50 text-red-500 rounded transition-colors" title="Delete Team">
+                                            <Trash2 size={16}/>
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         )}
 
         {/* === TAB 3: SETTINGS === */}
         {activeTab === 'settings' && (
-            <div className="max-w-xl mx-auto bg-red-900/10 border border-red-900/30 p-6 rounded-xl">
-                <h2 className="text-red-500 font-bold mb-4 flex gap-2"><AlertOctagon/> Danger Zone</h2>
-                <button onClick={handleReset} className="w-full bg-red-600/20 hover:bg-red-600/40 text-red-500 border border-red-600/50 py-4 rounded font-bold flex justify-center gap-2">
-                    <Trash2/> FACTORY RESET GAME
+            <div className="max-w-xl mx-auto bg-red-900/10 border border-red-900/30 p-8 rounded-xl text-center space-y-4">
+                <AlertOctagon size={48} className="text-red-500 mx-auto"/>
+                <h2 className="text-red-500 font-bold text-xl">Danger Zone</h2>
+                <p className="text-slate-400 text-sm">This will wipe all cash, debt, and history for every team. It cannot be undone.</p>
+                <button onClick={handleReset} className="w-full bg-red-600/20 hover:bg-red-600/40 text-red-500 border border-red-600/50 py-4 rounded-lg font-bold flex justify-center gap-2 transition-all">
+                    FACTORY RESET GAME
                 </button>
             </div>
         )}
       </main>
-
-      {/* EDIT MODAL */}
-      {editingTeam && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] backdrop-blur-sm">
-            <div className="bg-slate-900 p-6 rounded-xl border border-slate-700 w-full max-w-md shadow-2xl">
-                <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-xl font-bold">Edit {editingTeam.code}</h2>
-                    <button onClick={()=>setEditingTeam(null)}><X className="text-slate-400"/></button>
-                </div>
-                <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-slate-950 p-4 rounded border border-slate-800">
-                            <label className="text-xs text-slate-500 uppercase font-bold">Add Cash</label>
-                            <input type="number" className="w-full bg-transparent text-xl font-mono mt-1 outline-none" 
-                                value={manualCash} onChange={e=>setManualCash(e.target.value)} placeholder="0"/>
-                        </div>
-                        <div className="bg-slate-950 p-4 rounded border border-slate-800">
-                            <label className="text-xs text-slate-500 uppercase font-bold">Add Debt</label>
-                            <input type="number" className="w-full bg-transparent text-xl font-mono mt-1 outline-none" 
-                                value={manualDebt} onChange={e=>setManualDebt(e.target.value)} placeholder="0"/>
-                        </div>
-                    </div>
-                    <button onClick={handleManualUpdate} className="w-full bg-emerald-600 hover:bg-emerald-500 py-3 rounded font-bold flex justify-center gap-2">
-                        <Save size={18}/> Apply
-                    </button>
-                </div>
-            </div>
-        </div>
-      )}
     </div>
   )
 }

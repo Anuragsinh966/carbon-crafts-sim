@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import { ShoppingCart, Leaf, TrendingUp, CheckCircle, Lock, DollarSign, Megaphone, Activity, Ticket } from 'lucide-react'
 import axios from 'axios'
+// --- PASTE THIS LINE TO FIX VERCEL ---
+axios.defaults.headers.common['ngrok-skip-browser-warning'] = 'true';
 
 export default function App() {
   const [session, setSession] = useState(null)

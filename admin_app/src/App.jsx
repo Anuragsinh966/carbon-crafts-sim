@@ -3,6 +3,8 @@ import { supabase } from './supabaseClient'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from 'recharts'
 import { Play, RotateCw, Gavel, Trophy, Lock, Unlock, Plus, Trash2, Mic, AlertOctagon, Wallet, Globe, Terminal, ShieldAlert, Edit, X, Save, RotateCcw, FileText } from 'lucide-react'
 import axios from 'axios'
+// --- PASTE THIS LINE TO FIX VERCEL ---
+axios.defaults.headers.common['ngrok-skip-browser-warning'] = 'true';
 
 const ENGINE_URL = import.meta.env.VITE_ENGINE_URL || "http://127.0.0.1:8000"
 

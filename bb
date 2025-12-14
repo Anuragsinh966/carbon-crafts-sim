@@ -42,12 +42,6 @@ class TeamInfoUpdate(BaseModel):
     password: str
     members: str
 
-class BuySupplierRequest(BaseModel):
-    team_code: str
-    item_name: str
-    cost: int
-    debt_effect: int
-
 class RoundRequest(BaseModel):
     event_name: str
 
@@ -367,10 +361,6 @@ def reset_game_full():
     # 3. Clear Claim Codes (Optional: Delete all created LOBBY codes)
     # Note: Supabase-py doesn't support 'truncate', so we delete where ID is not null
     supabase.table("claim_codes").delete().neq("code", "INVALID_CODE").execute()
-
-    # 4. CLEAR LOGS (The Fix)
-    # Deletes everything in the log table
-    supabase.table("master_log").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
     
     return {"status": "success"}
 # --- NEW: AUCTION CODE SYSTEM ---
@@ -513,6 +503,24 @@ def grant_auction_item(req: AuctionGrantRequest):
         "assets": new_assets
     }).eq("code", req.team_code).execute()
 
+   @app.post("/admin/grant-auction-item")
+def grant_auction_item(req: AuctionGrantRequest):
+    """Admin manually gives an item at a specific auction price."""
+    res = supabase.table("teams").select("*").eq("code", req.team_code).single().execute()
+    team = res.data
+    
+    if not team:
+        return {"status": "error", "message": "Team not found"}
+
+    current_assets = team.get('assets') or ""
+    new_assets = f"{current_assets},{req.item_name}".strip(",")
+
+    supabase.table("teams").update({
+        "cash": team['cash'] - req.price,
+        "carbon_debt": max(0, team['carbon_debt'] + req.debt_reduction),
+        "assets": new_assets
+    }).eq("code", req.team_code).execute()
+    
     # --- NEW: LOGGING ---
     try:
         current_round = supabase.table("config").select("value").eq("key", "current_round").single().execute().data['value']
@@ -522,6 +530,7 @@ def grant_auction_item(req: AuctionGrantRequest):
     
     return {"status": "success", "deducted": req.price} 
     
+    return {"status": "success", "deducted": req.price}
 @app.post("/admin/create-code")
 def create_claim_code(req: CreateCodeRequest):
     """Generates a secure, one-time code for a specific team."""
@@ -591,37 +600,3 @@ def get_master_logs():
     """Fetches the history of all transactions."""
     # Fetch last 100 logs, ordered by newest first
     return supabase.table("master_log").select("*").order("timestamp", desc=True).limit(100).execute().data
-@app.post("/buy-supplier")
-def buy_supplier(req: BuySupplierRequest):
-    """Handle purchase and logging automatically on the server."""
-
-    # 1. Get Team Data
-    res = supabase.table("teams").select("*").eq("code", req.team_code).single().execute()
-    team = res.data
-
-    if not team:
-        return {"status": "error", "message": "Team not found"}
-
-    if team['cash'] < req.cost:
-        raise HTTPException(status_code=400, detail="Insufficient Funds")
-
-    # 2. Calculate New Stats
-    new_cash = team['cash'] - req.cost
-    new_debt = max(0, team['carbon_debt'] + req.debt_effect)
-
-    # 3. Get Current Round (for the log)
-    config_res = supabase.table("config").select("value").eq("key", "current_round").single().execute()
-    current_round = int(config_res.data['value'])
-
-    # 4. Perform the Update (Instant Deduction)
-    supabase.table("teams").update({
-        "inventory_choice": req.item_name,
-        "cash": new_cash,
-        "carbon_debt": new_debt,
-        "last_action_round": current_round
-    }).eq("code", req.team_code).execute()
-
-    # 5. AUTOMATIC LOGGING (Server-Side)
-    log_transaction(req.team_code, current_round, "BUY_SUPPLIER", f"Bought {req.item_name} for ${req.cost}")
-
-    return {"status": "success", "new_cash": new_cash}
